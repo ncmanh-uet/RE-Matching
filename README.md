@@ -9,6 +9,11 @@ Transformers 6. Install `requirements.txt`; the original dependencies are kept
 in `requirements_old.txt`. See [migration and Kaggle instructions](docs/MIGRATION.md)
 for tested versions, smoke tests, and reproduction notes.
 
+Kaggle notebook for FewRel `m = 5` and `m = 15` (five relation splits each):
+[kaggle_fewrel_m5_m15.ipynb](notebooks/kaggle_fewrel_m5_m15.ipynb).
+Upload it to Kaggle and set the dataset path and training configuration in its
+first code cell to match your `m = 10` run.
+
 ## Original paper environment:
 
 > python: 3.8.3
