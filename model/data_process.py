@@ -43,7 +43,10 @@ def generate_attribute(args, train_description_file, val_description_file):
     # get fixed and pre-trained embedding encoder
     encoder_dict = {'bert-base-uncased': 'stsb-bert-base', 'roberta-base': 'stsb-roberta-base-v2',
                     'distilbert-base-uncased': 'stsb-distilbert-base', 'distilroberta-base': 'stsb-distilroberta-base-v2'}
-    encoder = SentenceTransformer(encoder_dict[args.pretrained_model])
+    encoder_name = getattr(args, 'description_model', None) or encoder_dict.get(args.pretrained_model)
+    if encoder_name is None:
+        raise ValueError('Specify --description_model for a local/custom BERT model.')
+    encoder = SentenceTransformer(encoder_name, device=str(getattr(args, 'device', 'cpu')))
     # get description sentence
     train_description_sentences = [inverse_tokenize(single_data['description']) for single_data in
                                    train_description_file]
@@ -136,9 +139,9 @@ def create_mini_batch(samples):
     marked_tail = pad_sequence(mark_tail, batch_first=True)
 
     attention_mask = pad_sequence(attention_mask, batch_first=True)
-    relation_emb = torch.tensor(relation_emb)
-    relation_head_emb = torch.tensor(relation_head_emb)
-    relation_tail_emb = torch.tensor(relation_tail_emb)
+    relation_emb = torch.from_numpy(np.stack(relation_emb).astype(np.float32))
+    relation_head_emb = torch.from_numpy(np.stack(relation_head_emb).astype(np.float32))
+    relation_tail_emb = torch.from_numpy(np.stack(relation_tail_emb).astype(np.float32))
 
     return tokens_tensors, marked_e1_tensor, marked_e2_tensor, marked_head, marked_tail, attention_mask, relation_emb, relation_head_emb, relation_tail_emb, label_ids
 
@@ -153,15 +156,13 @@ class FewRelDataset(Dataset):
         self.len = len(data)
         self.tokenizer = AutoTokenizer.from_pretrained(
             args.pretrained_model)
-        self.max_length = 128
+        self.max_length = min(getattr(args, 'max_length', 512), self.tokenizer.model_max_length)
         # in bert-base ,1001 is the index of ' #',1030 is the index of ' @'
         # in roberta ,849 is the index of ' #' ,787 is the index of ' @'
-        if args.pretrained_model in ['bert-base-uncased', 'distilbert-base-uncased']:
-            self.head_mark_ids = 1001
-            self.tail_mark_ids = 1030
-        elif args.pretrained_model in ['roberta-base', 'distilroberta-base']:
-            self.head_mark_ids = 849
-            self.tail_mark_ids = 787
+        self.head_mark_ids = self.tokenizer.convert_tokens_to_ids('#')
+        self.tail_mark_ids = self.tokenizer.convert_tokens_to_ids('@')
+        if self.tokenizer.unk_token_id in (self.head_mark_ids, self.tail_mark_ids):
+            raise ValueError('BERT tokenizer must contain # and @ entity markers.')
 
     def __getitem__(self, idx):
         single_data = self.data[idx]
@@ -171,28 +172,39 @@ class FewRelDataset(Dataset):
         pos2_end = single_data['t']['pos'][1]
         words = single_data['token']
 
-        if pos1 < pos2:
-            new_words = words[:pos1] + ['#'] + words[pos1:pos1_end] + ['#'] + words[pos1_end:pos2] \
-                        + ['@'] + words[pos2:pos2_end] + ['@'] + words[pos2_end:]
-
-        else:
-            new_words = words[:pos2] + ['@'] + words[pos2:pos2_end] + ['@'] + words[pos2_end:pos1] \
-                        + ['#'] + words[pos1:pos1_end] + ['#'] + words[pos1_end:]
-
-        sentence = " ".join(new_words)
-        tokens_info = self.tokenizer(sentence)
-        tokens_ids = tokens_info['input_ids']
-        attention_mask = torch.tensor(tokens_info['attention_mask'])
-        # for roberta
-        if pos2 == 0:
-            tokens_ids[1] = self.tail_mark_ids
-        elif pos1 == 0:
-            tokens_ids[1] = self.head_mark_ids
-
-        new_head_pos = tokens_ids.index(self.head_mark_ids)
-        new_tail_pos = tokens_ids.index(self.tail_mark_ids)
-        new_head_end_pos = tokens_ids.index(self.head_mark_ids, new_head_pos + 1)
-        new_tail_end_pos = tokens_ids.index(self.tail_mark_ids, new_tail_pos + 1)
+        # Encode fragments separately to distinguish inserted entity markers from
+        # literal #/@ characters already present in the source text.
+        entities = sorted([(pos1, pos1_end, self.head_mark_ids, 'head'),
+                           (pos2, pos2_end, self.tail_mark_ids, 'tail')])
+        if not (0 <= entities[0][0] < entities[0][1] <= entities[1][0]
+                < entities[1][1] <= len(words)):
+            raise ValueError(f'Invalid/overlapping entity spans in sample {idx}: {entities}')
+        content, positions, cursor = [], {}, 0
+        for start, end, marker, name in entities:
+            content.extend(self.tokenizer.encode(' '.join(words[cursor:start]), add_special_tokens=False))
+            opening = len(content)
+            content.append(marker)
+            content.extend(self.tokenizer.encode(' '.join(words[start:end]), add_special_tokens=False))
+            closing = len(content)
+            content.append(marker)
+            positions[name] = (opening, closing)
+            cursor = end
+        content.extend(self.tokenizer.encode(' '.join(words[cursor:]), add_special_tokens=False))
+        # Crop context only; never silently truncate an entity or its markers.
+        budget = self.max_length - 2  # BERT CLS and SEP
+        first = min(pair[0] for pair in positions.values())
+        last = max(pair[1] for pair in positions.values())
+        if last - first + 1 > budget:
+            raise ValueError(f'Sample {idx}: entity span exceeds max_length={self.max_length}')
+        offset = 0
+        if len(content) > budget:
+            offset = max(0, min(first - (budget - (last - first + 1)) // 2,
+                                len(content) - budget))
+        content = content[offset:offset + budget]
+        tokens_ids = [self.tokenizer.cls_token_id] + content + [self.tokenizer.sep_token_id]
+        attention_mask = torch.ones(len(tokens_ids), dtype=torch.long)
+        new_head_pos, new_head_end_pos = [p - offset + 1 for p in positions['head']]
+        new_tail_pos, new_tail_end_pos = [p - offset + 1 for p in positions['tail']]
         new_pos = (new_head_pos, new_tail_pos)
         new_entity_h = (new_head_pos + 1, new_head_end_pos)
         new_entity_t = (new_tail_pos + 1, new_tail_end_pos)

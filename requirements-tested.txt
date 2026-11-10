@@ -1,0 +1,7 @@
+# Exact direct dependencies tested locally (Python 3.14.3, CPU).
+# For Kaggle use requirements.txt to retain a compatible CUDA-enabled torch.
+torch==2.15.0
+transformers==5.22.2
+sentence-transformers==6.2.0
+scikit-learn==1.9.1
+numpy==2.5.4

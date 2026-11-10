@@ -1,4 +1,7 @@
-transformers
-sentence-transformers
-scikit-learn
-numpy
+# Python >= 3.12. Versions resolved and smoke-tested on 2026-11-10.
+# Keep Kaggle's CUDA-enabled PyTorch if it satisfies this requirement.
+torch>=2.6
+transformers==5.22.2
+sentence-transformers==6.2.0
+scikit-learn==1.9.1
+numpy==2.5.4

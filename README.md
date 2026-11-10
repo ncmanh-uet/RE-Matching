@@ -2,7 +2,14 @@
 
 This repository contains the offical code implementation of the ACL2023 paper "RE-Matching: A Fine-Grained Semantic Matching Method for Zero-Shot Relation Extraction"
 
-## Env:
+## Updated environment (2026-11-10)
+
+The modernized code uses Python >= 3.12, Transformers 5 and Sentence
+Transformers 6. Install `requirements.txt`; the original dependencies are kept
+in `requirements_old.txt`. See [migration and Kaggle instructions](docs/MIGRATION.md)
+for tested versions, smoke tests, and reproduction notes.
+
+## Original paper environment:
 
 > python: 3.8.3
 > 

@@ -43,9 +43,10 @@ def extract_relation_emb(model, testloader, mode):
     e1_hs = None
     e2_hs = None
     model.eval()
+    device = next(model.parameters()).device
     for data in testloader:
         tokens_tensors, marked_e1, marked_e2, marked_head, marked_tail, \
-        attention_mask, relation_emb, relation_head_emb, relation_tail_emb = [t.cuda() for t in data if t is not None]
+        attention_mask, relation_emb, relation_head_emb, relation_tail_emb = [t.to(device) for t in data[:9]]
 
         with torch.no_grad():
             outputs, out_sentence_emb, e1_h, e2_h = model(input_ids=tokens_tensors,
@@ -60,13 +61,13 @@ def extract_relation_emb(model, testloader, mode):
                                                           )
 
         if out_sentence_embs is None:
-            out_sentence_embs = out_sentence_emb
-            e1_hs = e1_h
-            e2_hs = e2_h
+            out_sentence_embs = out_sentence_emb.cpu()
+            e1_hs = e1_h.cpu()
+            e2_hs = e2_h.cpu()
         else:
-            out_sentence_embs = torch.cat((out_sentence_embs, out_sentence_emb))
-            e1_hs = torch.cat((e1_hs, e1_h))
-            e2_hs = torch.cat((e2_hs, e2_h))
+            out_sentence_embs = torch.cat((out_sentence_embs, out_sentence_emb.cpu()))
+            e1_hs = torch.cat((e1_hs, e1_h.cpu()))
+            e2_hs = torch.cat((e2_hs, e2_h.cpu()))
 
     return out_sentence_embs, e1_hs, e2_hs
 
@@ -89,7 +90,7 @@ def single_relation_evaluate(args, predicted_idx, gold_idx, idx2relation=None):
         rec = tp / tp_fn
         f1 = 0.0
         # Identify mis-classifications in specific relation
-        if idx2relation[r] in target_rel:
+        if idx2relation is not None and idx2relation[r] in target_rel:
             error_dict = {rel: 0 for idx, rel in idx2relation.items() if idx != r}
             target_indices = (gold_idx[:length] == r)
             l = len(target_indices.nonzero()[0])

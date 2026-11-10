@@ -1,11 +1,9 @@
 import torch
 import random
 import torch.nn as nn
-from torch.nn import MSELoss
 import torch.nn.functional as F
-from transformers import AutoModel, BertModel, BertPreTrainedModel
+from transformers import BertModel, BertPreTrainedModel
 from torch.autograd import Function
-import math
 
 
 class GradientReversalFunction(Function):
@@ -43,7 +41,8 @@ def dot_attention(q, k, v, v_mask=None, dropout=None):
     extended_v_mask = None
     if v_mask is not None:
         extended_v_mask = (1.0 - v_mask.unsqueeze(1)) * -100000.0
-    attention_weights += extended_v_mask
+    if extended_v_mask is not None:
+        attention_weights += extended_v_mask
     attention_weights = F.softmax(attention_weights, -1)
     if dropout is not None:
         attention_weights = dropout(attention_weights)
@@ -54,10 +53,10 @@ def dot_attention(q, k, v, v_mask=None, dropout=None):
 def emb_proj(fp, fc):
     # fp 和 fc 都是batch * tokens 的二维tensor
 
-    x_y = torch.matmul(fp, fc.t()).diag()
+    x_y = (fp * fc).sum(dim=-1)
     x_y_y = x_y.view(-1, 1) * fc
     y_length = (fc * fc).sum(dim=-1).view(-1, 1)
-    proj = x_y_y / y_length
+    proj = x_y_y / y_length.clamp_min(torch.finfo(fc.dtype).eps)
 
     return proj
 
@@ -76,7 +75,7 @@ class REMatchingModel(BertPreTrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.relation_emb_dim = config.hidden_size
-        self.margin = torch.tensor(config.margin)
+        self.margin = float(config.margin)
         self.alpha = config.alpha
         #self.bert = AutoModel.from_pretrained(args.pretrained_model)
         self.bert = BertModel(config)
@@ -88,6 +87,7 @@ class REMatchingModel(BertPreTrainedModel):
                                         nn.Linear(self.relation_emb_dim, self.num_labels)
                                         )
         self.rev_loss = nn.CrossEntropyLoss()
+        self.post_init()
 
     def forward(
             self,
@@ -110,7 +110,7 @@ class REMatchingModel(BertPreTrainedModel):
         )
 
         sequence_output = outputs[0]  # Sequence of hidden-states of the last layer
-        common_emb = dot_attention(self.code(torch.zeros(1, dtype=torch.long).cuda()), sequence_output.detach(),
+        common_emb = dot_attention(self.code(torch.zeros(1, dtype=torch.long, device=input_ids.device)), sequence_output.detach(),
                                    sequence_output.detach(), attention_mask)
 
         e1_h = extract_entity(sequence_output, marked_head)
@@ -130,29 +130,32 @@ class REMatchingModel(BertPreTrainedModel):
         if labels is not None:
             rev_logit = self.classifier(common_emb)
             revloss = self.rev_loss(rev_logit.view(-1, self.num_labels), labels.view(-1))
-            gamma = self.margin.cuda()
-            loss = torch.tensor(0.).cuda()
-            zeros = torch.tensor(0.).cuda()
+            gamma = self.margin
+            loss = sentence_embeddings.new_zeros(())
+            zeros = sentence_embeddings.new_zeros(())
             for a, b in enumerate(zip(sentence_embeddings, e1_h, e2_h)):
-                max_val = torch.tensor(0.).cuda()
+                max_val = sentence_embeddings.new_zeros(())
                 matched_sentence_pair = input_relation_emb[a]
                 matched_head_pair = input_relation_head_emb[a]
                 matched_tail_pair = input_relation_tail_emb[a]
 
-                pos_s = torch.cosine_similarity(matched_sentence_pair, b[0], dim=-1).cuda()
-                pos_h = torch.cosine_similarity(matched_head_pair, b[1], dim=-1).max().cuda()
-                pos_t = torch.cosine_similarity(matched_tail_pair, b[2], dim=-1).max().cuda()
+                pos_s = torch.cosine_similarity(matched_sentence_pair, b[0], dim=-1)
+                pos_h = torch.cosine_similarity(matched_head_pair, b[1], dim=-1).max()
+                pos_t = torch.cosine_similarity(matched_tail_pair, b[2], dim=-1).max()
                 pos = (1 - 2 * self.alpha) * pos_s + self.alpha * pos_h + self.alpha * pos_t
 
                 # randomly sample relation_emb
-                rand = random.sample(range(len(input_relation_emb)), num_neg_sample)
+                rand = random.sample(range(len(input_relation_emb)), min(num_neg_sample, len(input_relation_emb)))
+                if not rand:
+                    loss = loss + torch.maximum(zeros, max_val - pos + gamma)
+                    continue
                 neg_relation_emb = torch.stack([input_relation_emb[i] for i in rand])
                 neg_relation_head_emb = torch.stack([input_relation_head_emb[i] for i in rand])
                 neg_relation_tail_emb = torch.stack([input_relation_tail_emb[i] for i in rand])
                 for i, j in enumerate(zip(neg_relation_emb, neg_relation_head_emb, neg_relation_tail_emb)):
-                    tmp_s = torch.cosine_similarity(b[0], j[0], dim=-1).cuda()
-                    tmp_h = torch.cosine_similarity(b[1], j[1], dim=-1).max().cuda()
-                    tmp_t = torch.cosine_similarity(b[2], j[2], dim=-1).max().cuda()
+                    tmp_s = torch.cosine_similarity(b[0], j[0], dim=-1)
+                    tmp_h = torch.cosine_similarity(b[1], j[1], dim=-1).max()
+                    tmp_t = torch.cosine_similarity(b[2], j[2], dim=-1).max()
                     tmp = (1 - 2 * self.alpha) * tmp_s + self.alpha * tmp_h + self.alpha * tmp_t
                     if tmp > max_val:
                         if (matched_sentence_pair == j[0]).all():
@@ -160,8 +163,8 @@ class REMatchingModel(BertPreTrainedModel):
                         else:
                             max_val = tmp
 
-                neg = max_val.cuda()
-                loss += torch.max(zeros, neg - pos + gamma)
+                neg = max_val
+                loss = loss + torch.maximum(zeros, neg - pos + gamma)
             outputs = (loss, revloss)
             #outputs = (loss, )
         return outputs, sentence_embeddings, e1_h, e2_h
