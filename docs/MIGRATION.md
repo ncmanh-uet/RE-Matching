@@ -94,7 +94,7 @@ also accept local directories.
 - Clamp zero projection denominators to avoid NaNs and reject non-finite loss.
 - Resolve marker IDs from the tokenizer. Track inserted markers separately from
   literal `#`/`@` in the text, crop long context while preserving both entities,
-  and fail clearly for invalid/overlapping spans or entities too far apart to fit.
+  support nested, crossing and identical spans without duplicating source text, and fail clearly for invalid spans or entities too far apart to fit.
 - Order relation vectors by numeric label ID and stack NumPy arrays before
   conversion to tensors. Evaluate embeddings on CPU to reduce GPU memory use.
 - Create checkpoint directories, save unwrapped model weights, and load with
@@ -123,3 +123,25 @@ OOM, malformed unseen data or differences in the Kaggle environment.
 References: [Transformers v5 migration](https://github.com/huggingface/transformers/blob/main/MIGRATION_GUIDE_V5.md),
 [PyTorch checkpoint conventions](https://docs.pytorch.org/tutorials/beginner/saving_loading_models/),
 [SentenceTransformer API](https://www.sbert.net/docs/package_reference/sentence_transformer/model.html).
+
+
+## Wiki-ZSL overlapping entities (2026-11-11)
+
+The processed dataset contains 828 overlapping entity pairs among 93,383 samples.
+For example, sample 23 pairs `Virginia House of Delegates` with `Virginia`.
+These valid samples are retained. `model/entity_spans.py` inserts markers at
+word boundaries and independently tracks the lexical subwords belonging to each
+entity. Shared lexical tokens belong to both entity masks; inserted markers
+belong to neither. Disjoint spans retain the previous token stream.
+
+The three Wiki-ZSL notebooks no longer reject overlap during preflight. They
+check that the cloned code contains the updated span helper before training.
+Push both `model/entity_spans.py` and `model/data_process.py` to GitHub, upload
+the updated notebook, and start a fresh Kaggle session to clone the new HEAD.
+An existing working clone is not pulled automatically.
+
+Five span tests passed, including bookkeeping over all local Wiki-ZSL samples
+using a word-tokenizer test double; notebook runner tests use synthetic data
+and a fake trainer. The prior local venv is no longer present, so the updated
+real BERT forward/backward regression test has not been run locally. Run the
+notebook GPU smoke test to verify the installed tokenizer/model stack.

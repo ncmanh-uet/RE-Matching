@@ -1,3 +1,4 @@
+from entity_spans import encode_marked_sentence
 import json
 import torch
 import numpy as np
@@ -172,45 +173,17 @@ class FewRelDataset(Dataset):
         pos2_end = single_data['t']['pos'][1]
         words = single_data['token']
 
-        # Encode fragments separately to distinguish inserted entity markers from
-        # literal #/@ characters already present in the source text.
-        entities = sorted([(pos1, pos1_end, self.head_mark_ids, 'head'),
-                           (pos2, pos2_end, self.tail_mark_ids, 'tail')])
-        if not (0 <= entities[0][0] < entities[0][1] <= entities[1][0]
-                < entities[1][1] <= len(words)):
-            raise ValueError(f'Invalid/overlapping entity spans in sample {idx}: {entities}')
-        content, positions, cursor = [], {}, 0
-        for start, end, marker, name in entities:
-            content.extend(self.tokenizer.encode(' '.join(words[cursor:start]), add_special_tokens=False))
-            opening = len(content)
-            content.append(marker)
-            content.extend(self.tokenizer.encode(' '.join(words[start:end]), add_special_tokens=False))
-            closing = len(content)
-            content.append(marker)
-            positions[name] = (opening, closing)
-            cursor = end
-        content.extend(self.tokenizer.encode(' '.join(words[cursor:]), add_special_tokens=False))
-        # Crop context only; never silently truncate an entity or its markers.
-        budget = self.max_length - 2  # BERT CLS and SEP
-        first = min(pair[0] for pair in positions.values())
-        last = max(pair[1] for pair in positions.values())
-        if last - first + 1 > budget:
-            raise ValueError(f'Sample {idx}: entity span exceeds max_length={self.max_length}')
-        offset = 0
-        if len(content) > budget:
-            offset = max(0, min(first - (budget - (last - first + 1)) // 2,
-                                len(content) - budget))
-        content = content[offset:offset + budget]
-        tokens_ids = [self.tokenizer.cls_token_id] + content + [self.tokenizer.sep_token_id]
+        tokens_ids, new_pos, head_indices, tail_indices = encode_marked_sentence(
+            words, (pos1, pos1_end), (pos2, pos2_end), self.tokenizer, self.max_length, idx)
         attention_mask = torch.ones(len(tokens_ids), dtype=torch.long)
-        new_head_pos, new_head_end_pos = [p - offset + 1 for p in positions['head']]
-        new_tail_pos, new_tail_end_pos = [p - offset + 1 for p in positions['tail']]
-        new_pos = (new_head_pos, new_tail_pos)
-        new_entity_h = (new_head_pos + 1, new_head_end_pos)
-        new_entity_t = (new_tail_pos + 1, new_tail_end_pos)
-
-        marked_e1, marked_e2, mark_head, mark_tail = mark_fewrel_entity(new_pos, new_entity_h, new_entity_t,
-                                                                        len(tokens_ids))
+        marked_e1 = torch.zeros(len(tokens_ids), dtype=torch.long)
+        marked_e2 = torch.zeros(len(tokens_ids), dtype=torch.long)
+        mark_head = torch.zeros(len(tokens_ids), dtype=torch.long)
+        mark_tail = torch.zeros(len(tokens_ids), dtype=torch.long)
+        marked_e1[new_pos[0]] = 1
+        marked_e2[new_pos[1]] = 1
+        mark_head[head_indices] = 1
+        mark_tail[tail_indices] = 1
         relation_emb, relation_head_emb, relation_tail_emb = self.rel2vec[single_data['relation']]
         tokens_ids = torch.tensor(tokens_ids)
         label_idx_tensor = None

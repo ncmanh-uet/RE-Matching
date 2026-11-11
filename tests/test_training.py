@@ -66,6 +66,8 @@ class TrainingIntegrationTest(unittest.TestCase):
         for size in [3, 1]:
             dataset = FewRelDataset(self.args(), 'train',
                                     [self.sample(f'r{i % 2}') for i in range(size)], vectors, {'r0': 0, 'r1': 1})
+            for sample, (head, tail) in zip(dataset.data, [([0, 3], [0, 1]), ([0, 2], [1, 3]), ([0, 1], [0, 1])]):
+                sample['h']['pos'], sample['t']['pos'] = head, tail
             data = create_mini_batch([dataset[i] for i in range(size)])
             outputs, *_ = model(input_ids=data[0], e1_mask=data[1], e2_mask=data[2],
                                 marked_head=data[3], marked_tail=data[4], attention_mask=data[5],
