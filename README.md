@@ -11,8 +11,35 @@ for tested versions, smoke tests, and reproduction notes.
 
 Kaggle notebook for FewRel `m = 5` and `m = 15` (five relation splits each):
 [kaggle_fewrel_m5_m15.ipynb](notebooks/kaggle_fewrel_m5_m15.ipynb).
-Upload it to Kaggle and set the dataset path and training configuration in its
-first code cell to match your `m = 10` run.
+Upload it to Kaggle. Dataset discovery and the repository default training
+configuration (batch size 128, five epochs, seed 42, learning rate 2e-6) are
+already configured, following the `m = 10` script in `model/run_fewrel.sh`.
+
+For separate Kaggle sessions, upload
+[kaggle_fewrel_m5.ipynb](notebooks/kaggle_fewrel_m5.ipynb) and
+[kaggle_fewrel_m15.ipynb](notebooks/kaggle_fewrel_m15.ipynb) as two notebooks.
+Each runs five splits and writes to its own output directory. Both use the
+dataset committed in this repository, so a separate Kaggle dataset attachment
+is optional.
+
+Wiki-ZSL notebooks for separate Kaggle sessions:
+[m = 5](notebooks/kaggle_wikizsl_m5.ipynb),
+[m = 10](notebooks/kaggle_wikizsl_m10.ipynb), and
+[m = 15](notebooks/kaggle_wikizsl_m15.ipynb).
+Each runs the five relation splits `40` through `44`, with batch size 128,
+five epochs, training seed 42, and learning rate 2e-6. Logs, checkpoints,
+per-run results and mean/sample-standard-deviation summaries are saved under
+`/kaggle/working/wikizsl_m5`, `wikizsl_m10`, or `wikizsl_m15` respectively.
+The notebooks use the existing FewRel notebook workflow and retain Kaggle's
+CUDA-enabled Torch build.
+
+The full Wiki-ZSL dataset is currently absent from this local checkout. Add the
+processed `wikizsl_dataset.json` to `data/wikizsl/` and push it before running,
+or attach it as Kaggle input. The notebooks discover the file automatically,
+preferring the cloned repository. They clone the repository's current HEAD
+by default so a newly pushed dataset is included, and record the actual commit
+and data hash in the run manifest. Each split has five validation relations,
+`m` test relations and `108 - m` training relations out of 113 total.
 
 ## Original paper environment:
 
